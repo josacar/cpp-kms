@@ -1,6 +1,9 @@
 #include <iostream>
 #include <string>
 #include <vector>
+#include <iomanip>
+#include <fstream>
+#include <cstring>
 #include <aws/core/Aws.h>
 #include <aws/kms/KMSClient.h>
 #include <aws/kms/model/EncryptRequest.h>
@@ -40,10 +43,14 @@ private:
     std::string m_keyId;
 
 public:
-    KMSCrypto(const std::string& keyId) : m_keyId(keyId) {}
+    KMSCrypto(const std::string& keyId = "") : m_keyId(keyId) {}
 
     // Encrypt a plaintext message using AWS KMS
     std::vector<uint8_t> encrypt(const std::string& plaintext) {
+        if (m_keyId.empty()) {
+            throw std::runtime_error("Key ID is required for encryption");
+        }
+        
         Aws::KMS::Model::EncryptRequest request;
         request.SetKeyId(m_keyId);
         request.SetPlaintext(stringToByteBuffer(plaintext));
@@ -71,6 +78,11 @@ public:
         // Convert vector to ByteBuffer
         Aws::Utils::ByteBuffer cipherBlob(ciphertext.data(), ciphertext.size());
         request.SetCiphertextBlob(cipherBlob);
+        
+        // Only set KeyId if provided (optional for decryption)
+        if (!m_keyId.empty()) {
+            request.SetKeyId(m_keyId);
+        }
 
         auto outcome = m_kmsClient.Decrypt(request);
         if (!outcome.IsSuccess()) {
@@ -84,24 +96,118 @@ public:
     }
 };
 
-int main() {
+// Function to print usage information
+void printUsage(const char* programName) {
+    std::cout << "Usage: " << programName << " [OPTIONS]\n"
+              << "Options:\n"
+              << "  -e, --encrypt <message>    Encrypt the provided message\n"
+              << "  -d, --decrypt <ciphertext> Decrypt the provided ciphertext (in hex format)\n"
+              << "  -k, --key <key_id>         AWS KMS Key ID or ARN (required for encryption)\n"
+              << "  -h, --help                 Display this help message\n"
+              << std::endl;
+}
+
+// Function to convert hex string to bytes
+std::vector<uint8_t> hexToBytes(const std::string& hex) {
+    std::vector<uint8_t> bytes;
+    
+    for (size_t i = 0; i < hex.length(); i += 2) {
+        std::string byteString = hex.substr(i, 2);
+        uint8_t byte = static_cast<uint8_t>(std::stoi(byteString, nullptr, 16));
+        bytes.push_back(byte);
+    }
+    
+    return bytes;
+}
+
+int main(int argc, char* argv[]) {
     // Initialize AWS SDK
     Aws::SDKOptions options;
     Aws::InitAPI(options);
-    {
-        try {
-            // Replace with your actual KMS key ID or ARN
-            std::string keyId = "YOUR_KMS_KEY_ID";
-            
-            // Create KMS crypto instance
-            KMSCrypto kmsCrypto(keyId);
-            
-            // Message to encrypt
-            std::string message = "Hello, this is a secret message!";
-            std::cout << "Original message: " << message << std::endl;
-            
+    
+    // Default values
+    std::string keyId;
+    std::string message;
+    std::string ciphertext;
+    bool encrypt = false;
+    bool decrypt = false;
+    
+    // Parse command line arguments
+    for (int i = 1; i < argc; i++) {
+        if (strcmp(argv[i], "-h") == 0 || strcmp(argv[i], "--help") == 0) {
+            printUsage(argv[0]);
+            Aws::ShutdownAPI(options);
+            return 0;
+        }
+        else if (strcmp(argv[i], "-k") == 0 || strcmp(argv[i], "--key") == 0) {
+            if (i + 1 < argc) {
+                keyId = argv[++i];
+            } else {
+                std::cerr << "Error: Missing key ID after -k/--key" << std::endl;
+                printUsage(argv[0]);
+                Aws::ShutdownAPI(options);
+                return 1;
+            }
+        }
+        else if (strcmp(argv[i], "-e") == 0 || strcmp(argv[i], "--encrypt") == 0) {
+            if (i + 1 < argc) {
+                message = argv[++i];
+                encrypt = true;
+            } else {
+                std::cerr << "Error: Missing message after -e/--encrypt" << std::endl;
+                printUsage(argv[0]);
+                Aws::ShutdownAPI(options);
+                return 1;
+            }
+        }
+        else if (strcmp(argv[i], "-d") == 0 || strcmp(argv[i], "--decrypt") == 0) {
+            if (i + 1 < argc) {
+                ciphertext = argv[++i];
+                decrypt = true;
+            } else {
+                std::cerr << "Error: Missing ciphertext after -d/--decrypt" << std::endl;
+                printUsage(argv[0]);
+                Aws::ShutdownAPI(options);
+                return 1;
+            }
+        }
+        else {
+            std::cerr << "Error: Unknown option: " << argv[i] << std::endl;
+            printUsage(argv[0]);
+            Aws::ShutdownAPI(options);
+            return 1;
+        }
+    }
+    
+    // Validate arguments
+    if (encrypt && keyId.empty()) {
+        std::cerr << "Error: KMS Key ID is required for encryption" << std::endl;
+        printUsage(argv[0]);
+        Aws::ShutdownAPI(options);
+        return 1;
+    }
+    
+    if (!encrypt && !decrypt) {
+        std::cerr << "Error: Either encrypt or decrypt operation must be specified" << std::endl;
+        printUsage(argv[0]);
+        Aws::ShutdownAPI(options);
+        return 1;
+    }
+    
+    if (encrypt && decrypt) {
+        std::cerr << "Error: Cannot perform both encrypt and decrypt operations at once" << std::endl;
+        printUsage(argv[0]);
+        Aws::ShutdownAPI(options);
+        return 1;
+    }
+    
+    try {
+        // Create KMS crypto instance
+        KMSCrypto kmsCrypto(keyId);
+        
+        if (encrypt) {
             // Encrypt the message
-            std::cout << "Encrypting..." << std::endl;
+            std::cout << "Encrypting message..." << std::endl;
             auto encrypted = kmsCrypto.encrypt(message);
             
             // Display encrypted data as hex
@@ -111,19 +217,29 @@ int main() {
                           << static_cast<int>(byte);
             }
             std::cout << std::dec << std::endl;
+        }
+        else if (decrypt) {
+            // Convert hex string to bytes
+            std::vector<uint8_t> encryptedBytes;
+            try {
+                encryptedBytes = hexToBytes(ciphertext);
+            } catch (const std::exception& e) {
+                std::cerr << "Error: Invalid hex format in ciphertext" << std::endl;
+                Aws::ShutdownAPI(options);
+                return 1;
+            }
             
             // Decrypt the message
-            std::cout << "Decrypting..." << std::endl;
-            auto decrypted = kmsCrypto.decrypt(encrypted);
+            std::cout << "Decrypting ciphertext..." << std::endl;
+            auto decrypted = kmsCrypto.decrypt(encryptedBytes);
             
             // Display decrypted message
             std::cout << "Decrypted message: " << decrypted << std::endl;
-            
-        } catch (const std::exception& e) {
-            std::cerr << "Error: " << e.what() << std::endl;
-            Aws::ShutdownAPI(options);
-            return 1;
         }
+    } catch (const std::exception& e) {
+        std::cerr << "Error: " << e.what() << std::endl;
+        Aws::ShutdownAPI(options);
+        return 1;
     }
     
     // Clean up AWS SDK resources

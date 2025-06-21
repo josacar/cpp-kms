@@ -31,11 +31,29 @@ This project demonstrates how to use AWS KMS (Key Management Service) to encrypt
 Before running the application, make sure to:
 
 1. Configure your AWS credentials (using `aws configure` or environment variables)
-2. Update the KMS key ID in `src/main.cpp` with your own KMS key ID or ARN
+2. Have a valid KMS key ID or ARN ready for encryption operations
 
-Then run the application:
+Then run the application with one of the following options:
+
 ```bash
-./aws_kms_crypto
+# To encrypt a message (key ID required)
+./aws_kms_crypto --encrypt "Your secret message" --key "YOUR_KMS_KEY_ID"
+
+# To decrypt a ciphertext (in hex format, key ID optional)
+./aws_kms_crypto --decrypt "0123456789abcdef..."
+
+# You can also specify the key ID for decryption (optional)
+./aws_kms_crypto --decrypt "0123456789abcdef..." --key "YOUR_KMS_KEY_ID"
+
+# For help and usage information
+./aws_kms_crypto --help
+```
+
+You can also use the short form of the options:
+```bash
+./aws_kms_crypto -e "Your secret message" -k "YOUR_KMS_KEY_ID"
+./aws_kms_crypto -d "0123456789abcdef..."
+./aws_kms_crypto -h
 ```
 
 ## Project Structure
